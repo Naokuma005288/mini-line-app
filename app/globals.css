@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* ===================== */
+/*   チャット用アニメーション  */
+/* ===================== */
+
+/* 吹き出し：ふわっと＋ぷにっと出る */
+.chat-bubble {
+  animation: chat-bubble-in 0.22s
+    cubic-bezier(0.26, 0.82, 0.3, 1.2);
+  transform-origin: 100% 100%;
+  will-change: transform, opacity;
+}
+
+/* サーバー通知：すっとフェードイン */
+.chat-system {
+  animation: chat-system-in 0.26s ease-out;
+  will-change: transform, opacity;
+}
+
+@keyframes chat-bubble-in {
+  0% {
+    transform: translateY(8px) scale(0.75);
+    opacity: 0;
+    filter: blur(1px);
+  }
+  55% {
+    transform: translateY(-2px) scale(1.05);
+    opacity: 1;
+    filter: blur(0);
+  }
+  80% {
+    transform: translateY(0px) scale(0.97);
+  }
+  100% {
+    transform: translateY(0px) scale(1);
+  }
+}
+
+@keyframes chat-system-in {
+  0% {
+    transform: translateY(4px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* ===================== */
+/*   ボタン・入力のぷにぷに */
+/* ===================== */
+
+/* 全ボタンをちょいぷにっとさせる */
+button {
+  transition:
+    transform 0.12s ease-out,
+    box-shadow 0.12s ease-out,
+    background-color 0.12s ease-out,
+    opacity 0.12s ease-out;
+}
+
+button:hover {
+  transform: translateY(-1px) scale(1.03);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.12);
+}
+
+button:active {
+  transform: translateY(0) scale(0.97);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18);
+}
+
+/* 入力欄・テキストエリア：フォーカス時だけふわっと */
+input,
+textarea {
+  transition:
+    box-shadow 0.12s ease-out,
+    transform 0.12s ease-out,
+    border-color 0.12s ease-out,
+    background-color 0.12s ease-out;
+}
+
+input:focus,
+textarea:focus {
+  transform: translateY(-0.5px);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.28);
+}
+
+/* 使用したいカードに className="card-soft" を付けると、
+   ちょいふわっと浮く感じになる（トップのルーム一覧とかに使える） */
+.card-soft {
+  transition:
+    transform 0.14s ease-out,
+    box-shadow 0.14s ease-out,
+    background-color 0.14s ease-out;
+}
+
+.card-soft:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+}
+
+.card-soft:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+}
