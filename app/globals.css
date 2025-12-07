@@ -29,104 +29,74 @@ body {
 /*   チャット用アニメーション  */
 /* ===================== */
 
-/* 吹き出し：ふわっと＋ぷにっと出る */
 .chat-bubble {
-  animation: chat-bubble-in 0.22s
-    cubic-bezier(0.26, 0.82, 0.3, 1.2);
-  transform-origin: 100% 100%;
-  will-change: transform, opacity;
+  animation: chat-bubble-in 0.18s ease-out;
 }
 
-/* サーバー通知：すっとフェードイン */
+/* サーバー通知用 */
 .chat-system {
-  animation: chat-system-in 0.26s ease-out;
-  will-change: transform, opacity;
+  animation: chat-system-in 0.2s ease-out;
+}
+
+/* ぷにぷに感 */
+.chat-bubble-puni {
+  transition:
+    transform 0.12s ease-out,
+    box-shadow 0.12s ease-out,
+    background-color 0.12s ease-out;
+}
+
+.chat-bubble-puni:hover {
+  transform: translateY(-1px) scale(1.01);
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.08),
+    0 0 0 1px rgba(16, 185, 129, 0.12);
+}
+
+.chat-input-puni {
+  transition:
+    transform 0.12s ease-out,
+    box-shadow 0.12s ease-out,
+    border-color 0.12s ease-out;
+}
+
+.chat-input-puni:focus {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(52, 211, 153, 0.3);
+  border-color: rgba(16, 185, 129, 0.7);
+}
+
+/* 入力ボタンのぷにぷに */
+.btn-puni {
+  transition:
+    transform 0.08s ease-out,
+    box-shadow 0.08s ease-out,
+    background-color 0.12s ease-out;
+}
+
+.btn-puni:active {
+  transform: scale(0.96) translateY(1px);
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3) inset;
 }
 
 @keyframes chat-bubble-in {
-  0% {
-    transform: translateY(8px) scale(0.75);
+  from {
+    transform: translateY(4px) scale(0.96);
     opacity: 0;
-    filter: blur(1px);
   }
-  55% {
-    transform: translateY(-2px) scale(1.05);
+  to {
+    transform: translateY(0) scale(1);
     opacity: 1;
-    filter: blur(0);
-  }
-  80% {
-    transform: translateY(0px) scale(0.97);
-  }
-  100% {
-    transform: translateY(0px) scale(1);
   }
 }
 
 @keyframes chat-system-in {
-  0% {
-    transform: translateY(4px);
+  from {
+    transform: translateY(2px);
     opacity: 0;
   }
-  100% {
+  to {
     transform: translateY(0);
     opacity: 1;
   }
-}
-
-/* ===================== */
-/*   ボタン・入力のぷにぷに */
-/* ===================== */
-
-/* 全ボタンをちょいぷにっとさせる */
-button {
-  transition:
-    transform 0.12s ease-out,
-    box-shadow 0.12s ease-out,
-    background-color 0.12s ease-out,
-    opacity 0.12s ease-out;
-}
-
-button:hover {
-  transform: translateY(-1px) scale(1.03);
-  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.12);
-}
-
-button:active {
-  transform: translateY(0) scale(0.97);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18);
-}
-
-/* 入力欄・テキストエリア：フォーカス時だけふわっと */
-input,
-textarea {
-  transition:
-    box-shadow 0.12s ease-out,
-    transform 0.12s ease-out,
-    border-color 0.12s ease-out,
-    background-color 0.12s ease-out;
-}
-
-input:focus,
-textarea:focus {
-  transform: translateY(-0.5px);
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.28);
-}
-
-/* 使用したいカードに className="card-soft" を付けると、
-   ちょいふわっと浮く感じになる（トップのルーム一覧とかに使える） */
-.card-soft {
-  transition:
-    transform 0.14s ease-out,
-    box-shadow 0.14s ease-out,
-    background-color 0.14s ease-out;
-}
-
-.card-soft:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-}
-
-.card-soft:active {
-  transform: translateY(0);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
 }

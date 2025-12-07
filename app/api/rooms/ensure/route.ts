@@ -1,40 +1,28 @@
 // app/api/rooms/ensure/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { createRoom, getRoomInfo } from "@/lib/roomStore";
+import { getRoomInfo } from "@/lib/roomStore";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  let body: any;
+  let body: any = {};
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
-      { error: "JSON の形式が不正です" },
-      { status: 400 },
-    );
+    // 無視
   }
 
-  const rawRoomCode = body?.roomCode;
-  const rawName = body?.name;
+  const rawCode = body?.roomCode;
 
-  const roomCode =
-    typeof rawRoomCode === "string"
-      ? rawRoomCode.toUpperCase().trim()
-      : "";
-  const name =
-    typeof rawName === "string" ? rawName.trim() : undefined;
-
-  if (!roomCode) {
+  if (!rawCode || typeof rawCode !== "string") {
     return NextResponse.json(
       { error: "roomCode は必須です" },
       { status: 400 },
     );
   }
 
-  // すでに存在していればそれを返す / なければ作る
-  const room = createRoom(roomCode, name);
-  const info = getRoomInfo(room.code);
+  const roomCode = rawCode.toUpperCase().trim();
+  const info = await getRoomInfo(roomCode);
 
-  return NextResponse.json({ room: info });
+  return NextResponse.json(info, { status: 200 });
 }

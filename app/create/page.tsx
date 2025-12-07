@@ -5,7 +5,7 @@ import { useState } from "react";
 import Link from "next/link";
 
 export default function CreateRoomPage() {
-  const [adminSecret, setAdminSecret] = useState("");
+  const [adminSecret, setAdminSecret] = useState("NAOKI-NEW-ADMIN-2828");
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

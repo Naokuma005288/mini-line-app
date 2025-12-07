@@ -1,48 +1,48 @@
 // app/api/rooms/suspend/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { setRoomSuspended, addSystemMessage } from "@/lib/roomStore";
+import {
+  setRoomSuspended,
+  addSystemMessage,
+  getRoomInfo,
+} from "@/lib/roomStore";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  let body: any;
+  let body: any = {};
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
-      { error: "JSON の形式が不正です" },
-      { status: 400 },
-    );
+    // 無視
   }
 
-  const rawRoomCode = body?.roomCode;
-  const rawSuspended = body?.suspended;
+  const rawCode = body?.roomCode;
+  const suspended = Boolean(body?.suspended);
 
-  const roomCode =
-    typeof rawRoomCode === "string"
-      ? rawRoomCode.toUpperCase().trim()
-      : "";
-
-  const suspended = Boolean(rawSuspended);
-
-  if (!roomCode) {
+  if (!rawCode || typeof rawCode !== "string") {
     return NextResponse.json(
       { error: "roomCode は必須です" },
       { status: 400 },
     );
   }
 
-  const ok = setRoomSuspended(roomCode, suspended);
-  if (!ok) {
+  const roomCode = rawCode.toUpperCase().trim();
+  const room = await setRoomSuspended(roomCode, suspended);
+
+  if (!room) {
     return NextResponse.json(
-      { error: "指定されたルームが見つかりません" },
+      { error: "ルームが存在しません" },
       { status: 404 },
     );
   }
 
-  const text = suspended
-    ? "このルームは管理者によって一時停止されました。新しいメッセージは送信できません。"
-    : "このルームの一時停止が解除されました。メッセージ送信が再開されます。";
+  await addSystemMessage(
+    roomCode,
+    suspended
+      ? "このルームは一時停止されました"
+      : "このルームは再開されました",
+  );
 
-  addSystemMessage(roomCode, text);
-
-  return NextResponse.json({ ok: true, suspended });
+  const info = await getRoomInfo(roomCode);
+  return NextResponse.json(info, { status: 200 });
 }

@@ -1,385 +1,272 @@
 // lib/roomStore.ts
-import { supabase } from "./supabaseClient";
+// ルーム一覧・メッセージをサーバー側で管理するストア
+// ローカルでは data/rooms.json に保存
+// Vercel 本番ではファイル書き込みができないので「メモリのみ」で動く
 
-export type ChatMessage = {
+import fs from "fs";
+import path from "path";
+
+export type StoredMessage = {
   id: string;
+  roomCode: string;
   nickname: string;
   text: string;
+  isSystem: boolean;
   createdAt: string;
 };
 
-export type Room = {
+export type StoredRoom = {
   code: string;
   name?: string;
-  createdAt?: string;
   suspended: boolean;
+  createdAt: string;
+  lastMessageAt?: string;
+  messageCount: number;
 };
 
-function normalizeRoomCode(code: string): string {
-  return code.toUpperCase().trim();
-}
-
-// DB の rows をアプリ用の型に変換
-type RoomRow = {
-  code: string;
-  name: string | null;
-  created_at: string | null;
-  suspended: boolean | null;
+type Store = {
+  rooms: Record<string, StoredRoom>;
+  messages: Record<string, StoredMessage[]>;
 };
 
-type MessageRow = {
-  id: number; // bigserial
-  room_code: string;
-  nickname: string;
-  text: string;
-  created_at: string | null;
+const DATA_FILE = path.join(process.cwd(), "data", "rooms.json");
+// Vercel 本番など、ファイルが read-only な環境
+const IS_READ_ONLY_FS = process.env.VERCEL === "1";
+
+let loaded = false;
+let store: Store = {
+  rooms: {},
+  messages: {},
 };
 
-function mapRoomRow(row: RoomRow): Room {
-  return {
-    code: row.code,
-    name: row.name ?? undefined,
-    createdAt: row.created_at ?? undefined,
-    suspended: row.suspended ?? false,
-  };
+function createId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
-function mapMessageRow(row: MessageRow): ChatMessage {
-  return {
-    id: String(row.id),
-    nickname: row.nickname,
-    text: row.text,
-    createdAt: row.created_at ?? new Date().toISOString(),
-  };
+function ensureLoaded() {
+  if (loaded) return;
+  loaded = true;
+
+  if (IS_READ_ONLY_FS) {
+    // 本番ではファイルロードを諦めてメモリのみ
+    return;
+  }
+
+  try {
+    if (!fs.existsSync(DATA_FILE)) return;
+    const text = fs.readFileSync(DATA_FILE, "utf8");
+    if (!text) return;
+    const json = JSON.parse(text);
+    if (json && typeof json === "object") {
+      store.rooms = json.rooms ?? {};
+      store.messages = json.messages ?? {};
+    }
+  } catch (err) {
+    console.error("[roomStore] loadFromDisk error:", err);
+  }
 }
 
-// ==============================
-//  ルーム操作
-// ==============================
+function save() {
+  if (IS_READ_ONLY_FS) return;
+
+  try {
+    const dir = path.dirname(DATA_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const json = JSON.stringify(store, null, 2);
+    fs.writeFileSync(DATA_FILE, json, "utf8");
+  } catch (err) {
+    console.error("[roomStore] saveToDisk error:", err);
+  }
+}
+
+// ------- ルーム関連 -------
 
 export async function createRoom(
   code: string,
   name?: string,
-): Promise<Room> {
-  const norm = normalizeRoomCode(code);
-  const trimmedName = name?.trim() || null;
+): Promise<StoredRoom> {
+  ensureLoaded();
+  const c = code.toUpperCase();
+  const now = new Date().toISOString();
 
-  const { data, error } = await supabase
-    .from("rooms")
-    .upsert(
-      {
-        code: norm,
-        name: trimmedName,
-      },
-      { onConflict: "code" },
-    )
-    .select()
-    .single();
-
-  if (error || !data) {
-    console.error("[roomStore] createRoom error", error);
-    throw new Error("ルームの作成に失敗しました");
-  }
-
-  return mapRoomRow(data as RoomRow);
-}
-
-export async function getRoom(
-  roomCode: string,
-): Promise<Room | null> {
-  const norm = normalizeRoomCode(roomCode);
-
-  const { data, error } = await supabase
-    .from("rooms")
-    .select("*")
-    .eq("code", norm)
-    .maybeSingle();
-
-  if (error) {
-    console.error("[roomStore] getRoom error", error);
-    return null;
-  }
-  if (!data) return null;
-
-  return mapRoomRow(data as RoomRow);
-}
-
-// ==============================
-//  メッセージ
-// ==============================
-
-export async function addMessage(
-  roomCode: string,
-  nickname: string,
-  text: string,
-): Promise<ChatMessage | null> {
-  const norm = normalizeRoomCode(roomCode);
-
-  // ルームが無ければ自動作成
-  await createRoom(norm);
-
-  const { data, error } = await supabase
-    .from("messages")
-    .insert({
-      room_code: norm,
-      nickname,
-      text,
-    })
-    .select()
-    .single();
-
-  if (error || !data) {
-    console.error("[roomStore] addMessage error", error);
-    return null;
-  }
-
-  return mapMessageRow(data as MessageRow);
-}
-
-export async function addSystemMessage(
-  roomCode: string,
-  text: string,
-): Promise<ChatMessage | null> {
-  return addMessage(roomCode, "サーバー", text);
-}
-
-export async function getMessages(
-  roomCode: string,
-  opts?: { limit?: number; after?: string },
-): Promise<ChatMessage[]> {
-  const norm = normalizeRoomCode(roomCode);
-
-  let query = supabase
-    .from("messages")
-    .select("*")
-    .eq("room_code", norm)
-    .order("created_at", { ascending: true });
-
-  if (opts?.after) {
-    query = query.gt("created_at", opts.after);
-  }
-  if (opts?.limit && opts.limit > 0) {
-    query = query.limit(opts.limit);
-  }
-
-  const { data, error } = await query;
-
-  if (error || !data) {
-    if (error) {
-      console.error("[roomStore] getMessages error", error);
+  let room = store.rooms[c];
+  if (!room) {
+    room = {
+      code: c,
+      name: name?.trim().slice(0, 40),
+      suspended: false,
+      createdAt: now,
+      lastMessageAt: undefined,
+      messageCount: 0,
+    };
+  } else {
+    if (name && name.trim()) {
+      room.name = name.trim().slice(0, 40);
     }
-    return [];
   }
 
-  return (data as MessageRow[]).map(mapMessageRow);
+  store.rooms[c] = room;
+  save();
+  return room;
 }
 
-export async function clearRoom(
-  roomCode: string,
-): Promise<boolean> {
-  const norm = normalizeRoomCode(roomCode);
-
-  const { error } = await supabase
-    .from("messages")
-    .delete()
-    .eq("room_code", norm);
-
-  if (error) {
-    console.error("[roomStore] clearRoom error", error);
-    return false;
-  }
-  return true;
+export async function roomExists(code: string): Promise<boolean> {
+  ensureLoaded();
+  const c = code.toUpperCase();
+  return !!store.rooms[c];
 }
 
-// ==============================
-//  ルーム状態（停止・名前）
-// ==============================
-
-export async function setRoomSuspended(
-  roomCode: string,
-  suspended: boolean,
-): Promise<boolean> {
-  const norm = normalizeRoomCode(roomCode);
-
-  const { error } = await supabase
-    .from("rooms")
-    .update({ suspended })
-    .eq("code", norm);
-
-  if (error) {
-    console.error("[roomStore] setRoomSuspended error", error);
-    return false;
-  }
-  return true;
+export async function listRooms(): Promise<StoredRoom[]> {
+  ensureLoaded();
+  const rooms = Object.values(store.rooms);
+  // 最後のメッセージ or 作成日時で新しい順にソート
+  return rooms.sort((a, b) => {
+    const at = a.lastMessageAt ?? a.createdAt;
+    const bt = b.lastMessageAt ?? b.createdAt;
+    return bt.localeCompare(at);
+  });
 }
 
-export async function isRoomSuspended(
-  roomCode: string,
-): Promise<boolean> {
-  const norm = normalizeRoomCode(roomCode);
-
-  const { data, error } = await supabase
-    .from("rooms")
-    .select("suspended")
-    .eq("code", norm)
-    .maybeSingle();
-
-  if (error) {
-    console.error("[roomStore] isRoomSuspended error", error);
-    return false;
-  }
-
-  return Boolean((data as { suspended?: boolean } | null)?.suspended);
-}
-
-export async function setRoomName(
-  roomCode: string,
-  name: string,
-): Promise<boolean> {
-  const norm = normalizeRoomCode(roomCode);
-  const trimmed = name.trim();
-
-  const { error } = await supabase
-    .from("rooms")
-    .update({ name: trimmed || null })
-    .eq("code", norm);
-
-  if (error) {
-    console.error("[roomStore] setRoomName error", error);
-    return false;
-  }
-  return true;
-}
-
-// ==============================
-//  ルーム情報・一覧
-// ==============================
-
-export async function getRoomInfo(roomCode: string): Promise<{
+export async function getRoomInfo(code: string): Promise<{
   exists: boolean;
+  code: string;
   name?: string;
   suspended: boolean;
-  messageCount: number;
   createdAt?: string;
+  lastMessageAt?: string;
+  messageCount: number;
 }> {
-  const norm = normalizeRoomCode(roomCode);
-
-  const { data: roomData, error } = await supabase
-    .from("rooms")
-    .select("*")
-    .eq("code", norm)
-    .maybeSingle();
-
-  if (error) {
-    console.error("[roomStore] getRoomInfo error", error);
+  ensureLoaded();
+  const c = code.toUpperCase();
+  const room = store.rooms[c];
+  if (!room) {
     return {
       exists: false,
+      code: c,
+      name: undefined,
       suspended: false,
+      createdAt: undefined,
+      lastMessageAt: undefined,
       messageCount: 0,
     };
-  }
-
-  if (!roomData) {
-    return {
-      exists: false,
-      suspended: false,
-      messageCount: 0,
-    };
-  }
-
-  const room = mapRoomRow(roomData as RoomRow);
-
-  const { count, error: countError } = await supabase
-    .from("messages")
-    .select("*", { count: "exact", head: true })
-    .eq("room_code", norm);
-
-  if (countError) {
-    console.error("[roomStore] getRoomInfo count error", countError);
   }
 
   return {
     exists: true,
+    code: room.code,
     name: room.name,
     suspended: room.suspended,
-    messageCount: count ?? 0,
     createdAt: room.createdAt,
+    lastMessageAt: room.lastMessageAt,
+    messageCount: room.messageCount,
   };
 }
 
-export async function listRooms(): Promise<
-  {
-    code: string;
-    name?: string;
-    suspended: boolean;
-    messageCount: number;
-    createdAt?: string;
-  }[]
-> {
-  const { data, error } = await supabase
-    .from("rooms")
-    .select("*")
-    .order("created_at", { ascending: false });
-
-  if (error || !data) {
-    if (error) {
-      console.error("[roomStore] listRooms error", error);
-    }
-    return [];
-  }
-
-  const rows = data as RoomRow[];
-
-  // メッセージ数は部屋ごとに数える（ルーム数少ない想定なのでOK）
-  const result = await Promise.all(
-    rows.map(async (r) => {
-      const { count, error: countError } = await supabase
-        .from("messages")
-        .select("*", { count: "exact", head: true })
-        .eq("room_code", r.code);
-
-      if (countError) {
-        console.error(
-          "[roomStore] listRooms count error",
-          countError,
-        );
-      }
-
-      return {
-        code: r.code,
-        name: r.name ?? undefined,
-        suspended: r.suspended ?? false,
-        messageCount: count ?? 0,
-        createdAt: r.created_at ?? undefined,
-      };
-    }),
-  );
-
-  return result;
+export async function renameRoom(
+  code: string,
+  name: string,
+): Promise<StoredRoom | null> {
+  ensureLoaded();
+  const c = code.toUpperCase();
+  const room = store.rooms[c];
+  if (!room) return null;
+  room.name = name.trim().slice(0, 40);
+  save();
+  return room;
 }
 
-export async function deleteRoom(
-  roomCode: string,
-): Promise<boolean> {
-  const norm = normalizeRoomCode(roomCode);
+export async function setRoomSuspended(
+  code: string,
+  suspended: boolean,
+): Promise<StoredRoom | null> {
+  ensureLoaded();
+  const c = code.toUpperCase();
+  const room = store.rooms[c];
+  if (!room) return null;
+  room.suspended = suspended;
+  save();
+  return room;
+}
 
-  // 先にメッセージ削除
-  const { error: msgErr } = await supabase
-    .from("messages")
-    .delete()
-    .eq("room_code", norm);
-  if (msgErr) {
-    console.error("[roomStore] deleteRoom messages error", msgErr);
+export async function deleteRoom(code: string): Promise<boolean> {
+  ensureLoaded();
+  const c = code.toUpperCase();
+  const existed = !!store.rooms[c];
+  delete store.rooms[c];
+  delete store.messages[c];
+  if (existed) save();
+  return existed;
+}
+
+export async function clearRoomMessages(code: string): Promise<void> {
+  ensureLoaded();
+  const c = code.toUpperCase();
+  store.messages[c] = [];
+  const room = store.rooms[c];
+  if (room) {
+    room.messageCount = 0;
+    room.lastMessageAt = undefined;
+  }
+  save();
+}
+
+// ------- メッセージ関連 -------
+
+export async function addUserMessage(
+  code: string,
+  nickname: string,
+  text: string,
+  isSystem = false,
+): Promise<StoredMessage> {
+  ensureLoaded();
+  const c = code.toUpperCase();
+  const room = store.rooms[c];
+  if (!room) {
+    throw new Error("ROOM_NOT_FOUND");
   }
 
-  const { error } = await supabase
-    .from("rooms")
-    .delete()
-    .eq("code", norm);
+  const now = new Date().toISOString();
+  const msg: StoredMessage = {
+    id: createId(),
+    roomCode: c,
+    nickname: nickname.slice(0, 20),
+    text,
+    isSystem,
+    createdAt: now,
+  };
 
-  if (error) {
-    console.error("[roomStore] deleteRoom error", error);
-    return false;
+  if (!store.messages[c]) {
+    store.messages[c] = [];
   }
-  return true;
+  store.messages[c].push(msg);
+
+  room.messageCount = (room.messageCount ?? 0) + 1;
+  room.lastMessageAt = now;
+  save();
+
+  return msg;
+}
+
+export async function addSystemMessage(
+  code: string,
+  text: string,
+): Promise<StoredMessage> {
+  return addUserMessage(code, "サーバー", text, true);
+}
+
+export async function getMessages(
+  code: string,
+  after?: string,
+): Promise<StoredMessage[]> {
+  ensureLoaded();
+  const c = code.toUpperCase();
+  const arr = store.messages[c] ?? [];
+  const sorted = [...arr].sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt),
+  );
+
+  if (!after) return sorted;
+  return sorted.filter((m) => m.createdAt > after);
 }

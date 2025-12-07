@@ -1,5 +1,5 @@
 // lib/adminConfig.ts
 
-// ★ ここに管理者パスワードを 1 か所で定義する
-//   自分だけが覚えやすい値に変えてね（例はダミー）
-export const ADMIN_PASSWORD = "NAOKI-NEW-ADMIN-2828";
+// ★ ここだけが「唯一の」管理者パスワード
+//   好きな文字列に変えて使ってね（例はダミー）
+export const ADMIN_PASSWORD = "NAOKI-ADMIN-2828";

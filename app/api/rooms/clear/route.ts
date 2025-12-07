@@ -1,44 +1,37 @@
 // app/api/rooms/clear/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { clearRoom, addSystemMessage } from "@/lib/roomStore";
+import {
+  clearRoomMessages,
+  addSystemMessage,
+  getRoomInfo,
+} from "@/lib/roomStore";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  let body: any;
+  let body: any = {};
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
-      { error: "JSON の形式が不正です" },
-      { status: 400 },
-    );
+    // 無視
   }
 
-  const rawRoomCode = body?.roomCode;
-  const roomCode =
-    typeof rawRoomCode === "string"
-      ? rawRoomCode.toUpperCase().trim()
-      : "";
-
-  if (!roomCode) {
+  const rawCode = body?.roomCode;
+  if (!rawCode || typeof rawCode !== "string") {
     return NextResponse.json(
       { error: "roomCode は必須です" },
       { status: 400 },
     );
   }
 
-  const ok = clearRoom(roomCode);
-  if (!ok) {
-    return NextResponse.json(
-      { error: "指定されたルームが見つかりません" },
-      { status: 404 },
-    );
-  }
+  const roomCode = rawCode.toUpperCase().trim();
 
-  // 全削除後にサーバーからお知らせメッセージを1つだけ追加
-  addSystemMessage(
+  await clearRoomMessages(roomCode);
+  await addSystemMessage(
     roomCode,
-    "このルームのメッセージは管理者によってすべて削除されました。",
+    "メッセージがすべて削除されました",
   );
 
-  return NextResponse.json({ ok: true });
+  const info = await getRoomInfo(roomCode);
+  return NextResponse.json(info, { status: 200 });
 }
