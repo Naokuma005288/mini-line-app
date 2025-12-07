@@ -1,6 +1,5 @@
 // lib/roomStore.ts
-import fs from "node:fs";
-import path from "node:path";
+import { supabase } from "./supabaseClient";
 
 export type ChatMessage = {
   id: string;
@@ -12,241 +11,267 @@ export type ChatMessage = {
 export type Room = {
   code: string;
   name?: string;
-  createdAt: string;
-  messages: ChatMessage[];
+  createdAt?: string;
   suspended: boolean;
 };
-
-const rooms = new Map<string, Room>();
-
-// JSONを保存する場所
-const DATA_FILE = path.join(process.cwd(), "data", "rooms.json");
 
 function normalizeRoomCode(code: string): string {
   return code.toUpperCase().trim();
 }
 
-// ===== ディスクから読み込み =====
-function loadFromDisk() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      return;
-    }
-    const raw = fs.readFileSync(DATA_FILE, "utf8");
-    if (!raw) return;
+// DB の rows をアプリ用の型に変換
+type RoomRow = {
+  code: string;
+  name: string | null;
+  created_at: string | null;
+  suspended: boolean | null;
+};
 
-    const arr = JSON.parse(raw) as any[];
-    rooms.clear();
+type MessageRow = {
+  id: number; // bigserial
+  room_code: string;
+  nickname: string;
+  text: string;
+  created_at: string | null;
+};
 
-    for (const r of arr) {
-      if (!r || typeof r.code !== "string") continue;
-      const norm = normalizeRoomCode(r.code);
-
-      const messages: ChatMessage[] = Array.isArray(r.messages)
-        ? r.messages
-        : [];
-
-      rooms.set(norm, {
-        code: norm,
-        name:
-          typeof r.name === "string" && r.name.trim() !== ""
-            ? r.name
-            : undefined,
-        createdAt:
-          typeof r.createdAt === "string"
-            ? r.createdAt
-            : new Date().toISOString(),
-        suspended: Boolean(r.suspended),
-        messages,
-      });
-    }
-
-    console.log(
-      `[roomStore] loaded ${rooms.size} rooms from ${DATA_FILE}`,
-    );
-  } catch (err) {
-    console.error("[roomStore] loadFromDisk error:", err);
-  }
-}
-
-// ===== ディスクに保存 =====
-function saveToDisk() {
-  try {
-    const dir = path.dirname(DATA_FILE);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const arr = Array.from(rooms.values());
-    fs.writeFileSync(
-      DATA_FILE,
-      JSON.stringify(arr, null, 2),
-      "utf8",
-    );
-  } catch (err) {
-    console.error("[roomStore] saveToDisk error:", err);
-  }
-}
-
-// 起動時に一度ロード
-loadFromDisk();
-
-// ==============================
-// 公開 API
-// ==============================
-
-// ルーム作成（createページやAPI用）
-export function createRoom(code: string, name?: string): Room {
-  const norm = normalizeRoomCode(code);
-  let room = rooms.get(norm);
-
-  const trimmedName = name?.trim();
-
-  if (room) {
-    // すでに存在していて、名前だけ更新するパターン
-    if (trimmedName && room.name !== trimmedName) {
-      room.name = trimmedName;
-      saveToDisk();
-    }
-    return room;
-  }
-
-  room = {
-    code: norm,
-    name: trimmedName || undefined,
-    createdAt: new Date().toISOString(),
-    messages: [],
-    suspended: false,
+function mapRoomRow(row: RoomRow): Room {
+  return {
+    code: row.code,
+    name: row.name ?? undefined,
+    createdAt: row.created_at ?? undefined,
+    suspended: row.suspended ?? false,
   };
-  rooms.set(norm, room);
-  saveToDisk();
-  return room;
 }
 
-export function getRoom(roomCode: string): Room | undefined {
+function mapMessageRow(row: MessageRow): ChatMessage {
+  return {
+    id: String(row.id),
+    nickname: row.nickname,
+    text: row.text,
+    createdAt: row.created_at ?? new Date().toISOString(),
+  };
+}
+
+// ==============================
+//  ルーム操作
+// ==============================
+
+export async function createRoom(
+  code: string,
+  name?: string,
+): Promise<Room> {
+  const norm = normalizeRoomCode(code);
+  const trimmedName = name?.trim() || null;
+
+  const { data, error } = await supabase
+    .from("rooms")
+    .upsert(
+      {
+        code: norm,
+        name: trimmedName,
+      },
+      { onConflict: "code" },
+    )
+    .select()
+    .single();
+
+  if (error || !data) {
+    console.error("[roomStore] createRoom error", error);
+    throw new Error("ルームの作成に失敗しました");
+  }
+
+  return mapRoomRow(data as RoomRow);
+}
+
+export async function getRoom(
+  roomCode: string,
+): Promise<Room | null> {
   const norm = normalizeRoomCode(roomCode);
-  return rooms.get(norm);
+
+  const { data, error } = await supabase
+    .from("rooms")
+    .select("*")
+    .eq("code", norm)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[roomStore] getRoom error", error);
+    return null;
+  }
+  if (!data) return null;
+
+  return mapRoomRow(data as RoomRow);
 }
 
-// メッセージ追加
-export function addMessage(
+// ==============================
+//  メッセージ
+// ==============================
+
+export async function addMessage(
   roomCode: string,
   nickname: string,
   text: string,
-): ChatMessage | null {
+): Promise<ChatMessage | null> {
   const norm = normalizeRoomCode(roomCode);
 
-  let room = rooms.get(norm);
-  if (!room) {
-    // ルームがまだない場合でも、初メッセージで自動作成する
-    room = {
-      code: norm,
-      createdAt: new Date().toISOString(),
-      messages: [],
-      suspended: false,
-    };
-    rooms.set(norm, room);
+  // ルームが無ければ自動作成
+  await createRoom(norm);
+
+  const { data, error } = await supabase
+    .from("messages")
+    .insert({
+      room_code: norm,
+      nickname,
+      text,
+    })
+    .select()
+    .single();
+
+  if (error || !data) {
+    console.error("[roomStore] addMessage error", error);
+    return null;
   }
 
-  const msg: ChatMessage = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    nickname,
-    text,
-    createdAt: new Date().toISOString(),
-  };
-
-  room.messages.push(msg);
-  saveToDisk();
-  return msg;
+  return mapMessageRow(data as MessageRow);
 }
 
-// システム（サーバー）メッセージ
-export function addSystemMessage(
+export async function addSystemMessage(
   roomCode: string,
   text: string,
-): ChatMessage | null {
+): Promise<ChatMessage | null> {
   return addMessage(roomCode, "サーバー", text);
 }
 
-// メッセージ取得
-export function getMessages(
+export async function getMessages(
   roomCode: string,
   opts?: { limit?: number; after?: string },
-): ChatMessage[] {
+): Promise<ChatMessage[]> {
   const norm = normalizeRoomCode(roomCode);
-  const room = rooms.get(norm);
-  if (!room) return [];
 
-  let list = room.messages;
+  let query = supabase
+    .from("messages")
+    .select("*")
+    .eq("room_code", norm)
+    .order("created_at", { ascending: true });
 
   if (opts?.after) {
-    list = list.filter((m) => m.createdAt > opts.after!);
+    query = query.gt("created_at", opts.after);
   }
-
   if (opts?.limit && opts.limit > 0) {
-    list = list.slice(-opts.limit);
+    query = query.limit(opts.limit);
   }
 
-  return list;
+  const { data, error } = await query;
+
+  if (error || !data) {
+    if (error) {
+      console.error("[roomStore] getMessages error", error);
+    }
+    return [];
+  }
+
+  return (data as MessageRow[]).map(mapMessageRow);
 }
 
-// メッセージ全削除
-export function clearRoom(roomCode: string): boolean {
+export async function clearRoom(
+  roomCode: string,
+): Promise<boolean> {
   const norm = normalizeRoomCode(roomCode);
-  const room = rooms.get(norm);
-  if (!room) return false;
 
-  room.messages = [];
-  saveToDisk();
+  const { error } = await supabase
+    .from("messages")
+    .delete()
+    .eq("room_code", norm);
+
+  if (error) {
+    console.error("[roomStore] clearRoom error", error);
+    return false;
+  }
   return true;
 }
 
-// 一時停止フラグ
-export function setRoomSuspended(
+// ==============================
+//  ルーム状態（停止・名前）
+// ==============================
+
+export async function setRoomSuspended(
   roomCode: string,
   suspended: boolean,
-): boolean {
+): Promise<boolean> {
   const norm = normalizeRoomCode(roomCode);
-  const room = rooms.get(norm);
-  if (!room) return false;
 
-  room.suspended = suspended;
-  saveToDisk();
+  const { error } = await supabase
+    .from("rooms")
+    .update({ suspended })
+    .eq("code", norm);
+
+  if (error) {
+    console.error("[roomStore] setRoomSuspended error", error);
+    return false;
+  }
   return true;
 }
 
-export function isRoomSuspended(roomCode: string): boolean {
+export async function isRoomSuspended(
+  roomCode: string,
+): Promise<boolean> {
   const norm = normalizeRoomCode(roomCode);
-  const room = rooms.get(norm);
-  if (!room) return false;
-  return room.suspended;
+
+  const { data, error } = await supabase
+    .from("rooms")
+    .select("suspended")
+    .eq("code", norm)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[roomStore] isRoomSuspended error", error);
+    return false;
+  }
+
+  return Boolean((data as { suspended?: boolean } | null)?.suspended);
 }
 
-// ルーム名
-export function setRoomName(
+export async function setRoomName(
   roomCode: string,
   name: string,
-): boolean {
+): Promise<boolean> {
   const norm = normalizeRoomCode(roomCode);
-  const room = rooms.get(norm);
-  if (!room) return false;
-
   const trimmed = name.trim();
-  room.name = trimmed || undefined;
-  saveToDisk();
+
+  const { error } = await supabase
+    .from("rooms")
+    .update({ name: trimmed || null })
+    .eq("code", norm);
+
+  if (error) {
+    console.error("[roomStore] setRoomName error", error);
+    return false;
+  }
   return true;
 }
 
-// 管理画面・情報取得
-export function getRoomInfo(roomCode: string): {
+// ==============================
+//  ルーム情報・一覧
+// ==============================
+
+export async function getRoomInfo(roomCode: string): Promise<{
   exists: boolean;
   name?: string;
   suspended: boolean;
   messageCount: number;
   createdAt?: string;
-} {
+}> {
   const norm = normalizeRoomCode(roomCode);
-  const room = rooms.get(norm);
-  if (!room) {
+
+  const { data: roomData, error } = await supabase
+    .from("rooms")
+    .select("*")
+    .eq("code", norm)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[roomStore] getRoomInfo error", error);
     return {
       exists: false,
       suspended: false,
@@ -254,40 +279,107 @@ export function getRoomInfo(roomCode: string): {
     };
   }
 
+  if (!roomData) {
+    return {
+      exists: false,
+      suspended: false,
+      messageCount: 0,
+    };
+  }
+
+  const room = mapRoomRow(roomData as RoomRow);
+
+  const { count, error: countError } = await supabase
+    .from("messages")
+    .select("*", { count: "exact", head: true })
+    .eq("room_code", norm);
+
+  if (countError) {
+    console.error("[roomStore] getRoomInfo count error", countError);
+  }
+
   return {
     exists: true,
     name: room.name,
     suspended: room.suspended,
-    messageCount: room.messages.length,
+    messageCount: count ?? 0,
     createdAt: room.createdAt,
   };
 }
 
-// ルーム一覧（トップ画面用）
-export function listRooms(): {
-  code: string;
-  name?: string;
-  suspended: boolean;
-  messageCount: number;
-  createdAt?: string;
-}[] {
-  return Array.from(rooms.values())
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .map((r) => ({
-      code: r.code,
-      name: r.name,
-      suspended: r.suspended,
-      messageCount: r.messages.length,
-      createdAt: r.createdAt,
-    }));
+export async function listRooms(): Promise<
+  {
+    code: string;
+    name?: string;
+    suspended: boolean;
+    messageCount: number;
+    createdAt?: string;
+  }[]
+> {
+  const { data, error } = await supabase
+    .from("rooms")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error || !data) {
+    if (error) {
+      console.error("[roomStore] listRooms error", error);
+    }
+    return [];
+  }
+
+  const rows = data as RoomRow[];
+
+  // メッセージ数は部屋ごとに数える（ルーム数少ない想定なのでOK）
+  const result = await Promise.all(
+    rows.map(async (r) => {
+      const { count, error: countError } = await supabase
+        .from("messages")
+        .select("*", { count: "exact", head: true })
+        .eq("room_code", r.code);
+
+      if (countError) {
+        console.error(
+          "[roomStore] listRooms count error",
+          countError,
+        );
+      }
+
+      return {
+        code: r.code,
+        name: r.name ?? undefined,
+        suspended: r.suspended ?? false,
+        messageCount: count ?? 0,
+        createdAt: r.created_at ?? undefined,
+      };
+    }),
+  );
+
+  return result;
 }
 
-// ルーム削除（トップ画面などから使う）
-export function deleteRoom(roomCode: string): boolean {
+export async function deleteRoom(
+  roomCode: string,
+): Promise<boolean> {
   const norm = normalizeRoomCode(roomCode);
-  const existed = rooms.delete(norm);
-  if (existed) {
-    saveToDisk();
+
+  // 先にメッセージ削除
+  const { error: msgErr } = await supabase
+    .from("messages")
+    .delete()
+    .eq("room_code", norm);
+  if (msgErr) {
+    console.error("[roomStore] deleteRoom messages error", msgErr);
   }
-  return existed;
+
+  const { error } = await supabase
+    .from("rooms")
+    .delete()
+    .eq("code", norm);
+
+  if (error) {
+    console.error("[roomStore] deleteRoom error", error);
+    return false;
+  }
+  return true;
 }
