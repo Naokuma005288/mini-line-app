@@ -1,34 +1,51 @@
-// app/api/rooms/join/route.ts
+// app/api/rooms/create/join/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { hasRoom } from "@/lib/roomStore";
+import { createRoom, getRoomInfo } from "@/lib/roomStore";
 
+export const dynamic = "force-dynamic";
+
+/**
+ * 指定された roomCode のルームに「入る or 作る」API
+ * - すでに存在していればそのルーム情報を返す
+ * - 無ければ新しく作って、情報を返す
+ *
+ * POST /api/rooms/create/join
+ * body: { roomCode: string, name?: string }
+ */
 export async function POST(req: NextRequest) {
-  let body: any;
+  let body: any = {};
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
-      { error: "リクエストの形式が不正です" },
-      { status: 400 }
-    );
+    // body なしでも一応動くように
   }
 
-  const roomCode = (body?.roomCode as string | undefined)?.toUpperCase();
+  const rawCode = body?.roomCode;
+  const rawName = body?.name;
+
+  const roomCode =
+    typeof rawCode === "string"
+      ? rawCode.toUpperCase().trim()
+      : "";
+  const name =
+    typeof rawName === "string" ? rawName.trim() : undefined;
 
   if (!roomCode) {
     return NextResponse.json(
-      { error: "ルームコードが送られていません" },
-      { status: 400 }
+      { error: "roomCode は必須です" },
+      { status: 400 },
     );
   }
 
-  if (!hasRoom(roomCode)) {
-    return NextResponse.json(
-      { error: "そのルームは存在しません" },
-      { status: 404 }
-    );
-  }
+  // Supabase 側に upsert（無ければ作る・あればそのまま）
+  await createRoom(roomCode, name);
 
-  // あとでここに「参加者管理」とかを入れてもいい
-  return NextResponse.json({ ok: true, roomCode });
+  const info = await getRoomInfo(roomCode);
+
+  return NextResponse.json(
+    {
+      room: info,
+    },
+    { status: 200 },
+  );
 }
